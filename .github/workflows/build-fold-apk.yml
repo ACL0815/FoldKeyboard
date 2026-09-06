@@ -1,0 +1,46 @@
+name: Build FoldKeyboard from patch
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'fold-keyboard.patch'
+      - '.github/workflows/build-fold-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply reviewed FoldKeyboard implementation
+        run: |
+          git apply --check fold-keyboard.patch
+          git apply fold-keyboard.patch
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android toolchain
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.0.13004108'
+      - name: Check fold gesture logic
+        run: bash tools/test-fold-core.sh
+      - name: Build and test
+        run: bash gradlew :app:testDebugNoMinifyUnitTest --tests 'helium314.keyboard.fold.FoldCoreTest' :app:assembleDebugNoMinify :app:lintDebugNoMinify --stacktrace
+      - name: Upload signed development APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoldKeyboard-0.1-debug
+          path: app/build/outputs/apk/debugNoMinify/*.apk
+          if-no-files-found: error
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoldKeyboard-reports
+          path: app/build/reports/
