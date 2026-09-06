@@ -1,0 +1,26 @@
+name: Inspect FoldKeyboard reports
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/inspect-fold-reports.yml']
+permissions:
+  actions: read
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FoldKeyboard-reports
+          run-id: 34015969919
+          github-token: ${{ github.token }}
+      - name: Show lint errors and Fold warnings
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          r=ET.parse('lint-results-debugNoMinify.xml').getroot()
+          for i in r:
+              if i.get('severity')=='Error' or any('/fold/' in l.get('file','') for l in i.findall('location')):
+                  print(ET.tostring(i,encoding='unicode'))
+          PY
