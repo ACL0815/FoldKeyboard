@@ -1,0 +1,1776 @@
+diff --git a/.github/workflows/fold-keyboard.yml b/.github/workflows/fold-keyboard.yml
+new file mode 100644
+index 0000000..0b7f88c
+--- /dev/null
++++ b/.github/workflows/fold-keyboard.yml
+@@ -0,0 +1,38 @@
++name: FoldKeyboard APK
++
++on:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    timeout-minutes: 40
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: '17'
++      - uses: android-actions/setup-android@v3
++      - uses: gradle/actions/setup-gradle@v4
++      - name: Install Android toolchain
++        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.0.13004108'
++      - name: Check fold gesture logic
++        run: bash tools/test-fold-core.sh
++      - name: Build and test
++        run: bash gradlew :app:testDebugNoMinifyUnitTest --tests 'helium314.keyboard.fold.FoldCoreTest' :app:assembleDebugNoMinify :app:lintDebugNoMinify --stacktrace
++      - name: Upload signed development APK
++        uses: actions/upload-artifact@v4
++        with:
++          name: FoldKeyboard-0.1-debug
++          path: app/build/outputs/apk/debugNoMinify/*.apk
++          if-no-files-found: error
++      - name: Upload test and lint reports
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: FoldKeyboard-reports
++          path: app/build/reports/
+diff --git a/.gitignore b/.gitignore
+index ad99040..298e579 100755
+--- a/.gitignore
++++ b/.gitignore
+@@ -15,3 +15,4 @@ tools/*.txt
+ *.patch
+ *.diff
+ *.sh
++!tools/test-fold-core.sh
+diff --git a/FOLDKEYBOARD.md b/FOLDKEYBOARD.md
+new file mode 100644
+index 0000000..24c30f2
+--- /dev/null
++++ b/FOLDKEYBOARD.md
+@@ -0,0 +1,137 @@
++# FoldKeyboard 0.1
++
++Experimenteller HeliBoard-Fork: links Trackpad, rechts eine kompakte Tastatur.
++IME und AccessibilityService befinden sich in derselben App. Kein Root.
++
++**Stand:** Quellcode implementiert. 33 lokale Prüfungen der Layout-/Gestenlogik bestanden.
++Java-Syntax, XML, Ressourcenreferenzen und Provider-Kennungen geprüft.
++**Noch nicht verifiziert:** vollständiger Android-Build, APK-Installation und Bedienung auf einem Fold.
++Dieses Paket enthält Quellcode, keine APK.
++
++Basis: [HeliBoard v4.1](https://github.com/HeliBorg/HeliBoard/releases/tag/v4.1),
++Commit `9f5bb635c2e8609dcd95dc7506c0c58fba82a52c`.
++Neue App-ID: `com.chris.foldkeyboard`; Entwicklungsbuild: `com.chris.foldkeyboard.debug`.
++Die Java-/Kotlin-Pakete bleiben für bestehende Klassen und JNI unverändert.
++Die ContentProvider-Kennungen sind getrennt; Installation neben HeliBoard ist vorgesehen.
++
++## Bedienung
++
++| Eingabe links | Wirkung |
++|---|---|
++| Ein Finger bewegen | Zeiger sofort bewegen, mit geschwindigkeitsabhängiger Beschleunigung |
++| Tippen | Klick nach dem Doppeltipp-Zeitfenster |
++| Doppeltippen | Zwei Touch-Klicks |
++| Halten, dann loslassen | Langer Touch |
++| Zwei Finger bewegen, dann loslassen | Scroll-Geste an der Zeigerposition |
++| „Ziehen“, danach bewegen und loslassen | Grünen Zeiger zum Ziel bewegen; anschließend Drag ausführen |
++| Doppeltippen und beim zweiten Kontakt bewegen | Dieselbe Ziehfunktion |
++| Drei Finger / abgebrochene Eingabe | Geste verwerfen |
++
++**Scrollen und Ziehen werden nach dem Loslassen ausgeführt.** Beim Ziehen folgt zunächst
++nur der grüne Zeiger; die Ziel-App erhält anschließend einen langen Touch und den
++aufgezeichneten Bewegungspfad. Das ist kein kontinuierliches Hardware-Maus-Dragging.
++Der Zeiger bleibt verfügbar, solange die Tastatur offen ist. Wenn ein App-Wechsel
++die Tastatur schließt, verschwindet auch der Zeiger. Hover, echtes Rechtsklick-Menü,
++Mouse-Source-Events und externe Displays sind nicht Teil dieser Version.
++
++Diese Ausführung berücksichtigt Androids dokumentiertes Verhalten:
++[`dispatchGesture`](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#dispatchGesture(android.accessibilityservice.GestureDescription,%20android.accessibilityservice.AccessibilityService.GestureResultCallback,%20android.os.Handler))
++bricht laufende Touch-Gesten ab, auch die des Benutzers. Eingespeiste Aktionen warten daher,
++bis alle Finger die gesamte Tastatur verlassen haben. Für Drag werden ein gehaltener Stroke
++und `continueStroke()` verwendet. Abgebrochene Eingaben erzeugen keinen nachträglichen Klick.
++Bereits gestartete kurze Touch-Gesten laufen bis zum Abschluss oder Systemabbruch;
++wartende Aktionen werden beim Schließen verworfen.
++
++## Layout und Einstellungen
++
++HeliBoard-Einstellungen → **Fold Trackpad**. Derselbe Bildschirm ist links über „Fold Trackpad“ erreichbar.
++
++- **Auto:** mindestens 600 dp verfügbare Breite und Höhe; dadurch bleibt das schmale
++  äußere Display auch im Querformat im normalen Tastaturmodus.
++- **Immer:** aktiviert ab 480 dp Breite, auch in schmaleren Fenstern.
++- **Aus:** normales HeliBoard einschließlich der gespeicherten Split-/Floating-Einstellungen.
++- Rechts maximal 45 % Breite. Standardziel 360 dp, begrenzt durch den verfügbaren Platz.
++  Wenn die Tastatur auf einem schmalen Hochkant-Display geöffnet wird, merkt sie sich dessen Breite.
++  Der Regler überschreibt dieses Ziel. Erster Reglerwert = automatisch.
++- Einstellbare Zeigergeschwindigkeit, Deutsch/Englisch, Phone-Zeilenhöhe.
++- Nach Änderungen die Tastatur schließen und erneut öffnen.
++
++Die Erkennung richtet sich nach Fenstermaßen, nicht nach einer Samsung-Modellnummer.
++Auf besonders kleinen Fenstern bleibt Auto aus. Externe Bildschirme bekommen keinen Zeiger.
++Wortvorschläge, Sprache, Zwischenablage, Emojis und Korrektur stammen weiterhin aus HeliBoard.
++
++## APK bauen
++
++### GitHub Actions
++
++1. Den Fork in ein eigenes GitHub-Repository übernehmen. Der Workflow muss auf dessen
++   Standardbranch liegen, damit „Run workflow“ erscheint.
++2. Actions → **FoldKeyboard APK** → **Run workflow**. Bei einem neuen Fork zuerst
++   dessen GitHub-Actions-Aktivierung bestätigen.
++3. Nach grünem Lauf das Artefakt **FoldKeyboard-0.1-debug** herunterladen und entpacken.
++
++Der Workflow installiert JDK 17, Android SDK 36 und NDK `28.0.13004108`, führt
++Kernprüfungen, Android-Unit-Test, APK-Build und Lint aus und lädt die entwicklersignierte APK hoch.
++Der Workflow ist vorbereitet, aber noch nicht ausgeführt. In dieser Arbeitsumgebung
++fehlen SDK/NDK; Gradle konnte wegen `Network is unreachable` nicht geladen werden.
++
++### Android Studio / Rechner mit Android SDK
++
++Projekt öffnen, JDK 17 verwenden, SDK-Plattform 36 und NDK `28.0.13004108` installieren.
++SDK-Pfad über Android Studio bzw. `local.properties` einrichten. Dann im Projektverzeichnis:
++
++```bash
++bash tools/test-fold-core.sh
++./gradlew :app:testDebugNoMinifyUnitTest --tests 'helium314.keyboard.fold.FoldCoreTest' :app:assembleDebugNoMinify :app:lintDebugNoMinify
++```
++
++APK-Ziel: `app/build/outputs/apk/debugNoMinify/FoldKeyboard_4.1-fold-0.1-debugNoMinify.apk`.
++Der Entwicklungsbuild wird vom Android-Buildsystem automatisch mit dem Debug-Schlüssel signiert.
++Für spätere Updates denselben Schlüssel behalten; frische CI-Runner erzeugen jeweils einen
++neuen Debug-Schlüssel. Ein langfristiger Daily-Driver benötigt deshalb einen dauerhaften Signierschlüssel.
++
++## Auf dem Fold installieren
++
++1. Die erzeugte APK aufs Phone übertragen, öffnen und installieren.
++2. In den Android-Tastatureinstellungen **FoldKeyboard debug** aktivieren und auswählen.
++3. FoldKeyboard öffnen → Fold Trackpad → **Mauszeiger aktivieren**.
++4. In Eingabehilfe/Bedienungshilfen unter installierten Diensten
++   **FoldKeyboard Mauszeiger** einschalten.
++5. Ein Textfeld öffnen und das Fold aufklappen. Links liegt das Trackpad, rechts die Tastatur.
++
++Falls Android den Dienst bei einer seitlich installierten APK unter „Eingeschränkte Einstellungen“
++sperrt: in den App-Infos zu FoldKeyboard diese Einstellungen freigeben und danach den Dienst aktivieren.
++Der Dienst fordert keine Bildschirm-Inhalte an. Es werden keine Internet- oder
++„Über anderen Apps einblenden“-Berechtigungen hinzugefügt.
++
++Mit USB-Debugging ist die Installation alternativ:
++
++```bash
++adb install -r app/build/outputs/apk/debugNoMinify/FoldKeyboard_4.1-fold-0.1-debugNoMinify.apk
++```
++
++## Noch ausstehender Gerätetest
++
++| Prüfung | Erwartetes Ergebnis |
++|---|---|
++| Außenbildschirm Hoch-/Querformat | Normales HeliBoard; kein Trackpad in Auto |
++| Aufklappen ohne Orientierungswechsel | Tastatur rechts, Trackpad links, korrekte Trefferflächen |
++| Rotation / Display-Zoom / Multiwindow | Layout neu berechnet, keine alten Zeigerkoordinaten |
++| Tippen, Umlaute, Vorschläge, Popups, Emoji, Clipboard | Bedienelemente rechts korrekt positioniert |
++| Web-Link und Button in anderer App | Touch an der sichtbaren Zeigerspitze |
++| Zwei Finger, dann einen anheben | Kein Zeigersprung; Scroll erst nach vollständigem Loslassen |
++| Ziehen einer Textauswahl / eines verschiebbaren Objekts | Langer Touch und fortgesetzter Pfad nach Loslassen |
++| Gleichzeitig rechts tippen | Keine Injection, solange ein Finger auf der Tastatur liegt |
++| App-Wechsel, IME schließen, Display aus, Sperrbildschirm | Overlay verschwindet; wartende Aktionen entfallen |
++| Dienst aus/ein bei offener Tastatur | Tippen bleibt verfügbar, Dienstverbindung erholt sich |
++| Parallel zu HeliBoard installieren | Keine Paket-/Provider-Kollision |
++
++## Änderungen und Lizenz
++
++Die neue Funktion liegt unter `app/src/main/java/helium314/keyboard/fold/`.
++Integrationspunkte: `InputView`, `LatinIME`, `SettingsValues`, `ResourceUtils`,
++`KeyboardSwitcher`, Startseite der Einstellungen, Manifest und App-ID.
++
++Neue Dateien: GPL-3.0-only. Bestehende HeliBoard-/AOSP-Lizenzhinweise bleiben erhalten.
++Der Quellcode wurde mit KI-Unterstützung erstellt. Dies ist ein eigener experimenteller Fork;
++es wurde kein KI-generierter Pull Request an das Upstream-Projekt eingereicht.
+diff --git a/README.md b/README.md
+index 295ec68..d2551d2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,12 @@
++# FoldKeyboard 0.1 — experimental HeliBoard fork
++
++Left trackpad, right phone-sized keyboard, and a rootless accessibility pointer in one app.
++Based on HeliBoard v4.1. See [setup, build instructions and verification status](FOLDKEYBOARD.md).
++The source is implemented; a full Android build and physical-device validation are still pending.
++Scroll and drag replay after finger release. The pointer is active while the keyboard is visible.
++
++---
++
+ # HeliBoard
+ HeliBoard is a privacy-conscious and customizable open-source keyboard, based on AOSP / OpenBoard.
+ Does not use internet permission, and thus is 100% offline.
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index a32f4d5..bc3a0f6 100755
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -12,11 +12,11 @@ android {
+     compileSdk = 36
+ 
+     defaultConfig {
+-        applicationId = "helium314.keyboard"
+-        minSdk = 21
++        applicationId = "com.chris.foldkeyboard"
++        minSdk = 26
+         targetSdk = 36
+         versionCode = 4101
+-        versionName = "4.1"
++        versionName = "4.1-fold-0.1"
+         ndk {
+             abiFilters.clear()
+             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+@@ -67,7 +67,7 @@ android {
+             }
+             variant.outputs.forEach { output ->
+                 if (output is com.android.build.api.variant.impl.VariantOutputImpl) {
+-                    output.outputFileName = "HeliBoard_${defaultConfig.versionName}-${variant.buildType}.apk"
++                    output.outputFileName = "FoldKeyboard_${defaultConfig.versionName}-${variant.buildType}.apk"
+                 }
+             }
+         }
+diff --git a/app/src/debug/res/values/clip_provider.xml b/app/src/debug/res/values/clip_provider.xml
+index 30c0f87..0b8b73e 100644
+--- a/app/src/debug/res/values/clip_provider.xml
++++ b/app/src/debug/res/values/clip_provider.xml
+@@ -1,4 +1,4 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="clipboard_provider_authority" translatable="false">helium314.keyboard.debug.clipprovider</string>
++    <string name="clipboard_provider_authority" translatable="false">com.chris.foldkeyboard.debug.clipprovider</string>
+ </resources>
+diff --git a/app/src/debug/res/values/gesture_data.xml b/app/src/debug/res/values/gesture_data.xml
+index 483aeba..cf1bd1c 100644
+--- a/app/src/debug/res/values/gesture_data.xml
++++ b/app/src/debug/res/values/gesture_data.xml
+@@ -3,5 +3,5 @@
+     SPDX-License-Identifier: GPL-3.0-only
+ -->
+ <resources>
+-    <string name="gesture_data_provider_authority" translatable="false">helium314.keyboard.debug.provider</string>
++    <string name="gesture_data_provider_authority" translatable="false">com.chris.foldkeyboard.debug.provider</string>
+ </resources>
+diff --git a/app/src/debug/res/values/strings.xml b/app/src/debug/res/values/strings.xml
+index e8755c2..21ceb2c 100644
+--- a/app/src/debug/res/values/strings.xml
++++ b/app/src/debug/res/values/strings.xml
+@@ -3,8 +3,8 @@
+     SPDX-License-Identifier: GPL-3.0-only
+ -->
+ <resources>
+-    <string name="english_ime_name" translatable="false">HeliBoard debug</string>
+-    <string name="spell_checker_service_name" translatable="false">HeliBoard debug Spell Checker</string>
+-    <string name="ime_settings" translatable="false">HeliBoard debug Settings</string>
++    <string name="english_ime_name" translatable="false">FoldKeyboard debug</string>
++    <string name="spell_checker_service_name" translatable="false">FoldKeyboard debug Spell Checker</string>
++    <string name="ime_settings" translatable="false">FoldKeyboard debug Settings</string>
+ 
+ </resources>
+diff --git a/app/src/debugNoMinify/res/values/clip_provider.xml b/app/src/debugNoMinify/res/values/clip_provider.xml
+index 30c0f87..0b8b73e 100644
+--- a/app/src/debugNoMinify/res/values/clip_provider.xml
++++ b/app/src/debugNoMinify/res/values/clip_provider.xml
+@@ -1,4 +1,4 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="clipboard_provider_authority" translatable="false">helium314.keyboard.debug.clipprovider</string>
++    <string name="clipboard_provider_authority" translatable="false">com.chris.foldkeyboard.debug.clipprovider</string>
+ </resources>
+diff --git a/app/src/debugNoMinify/res/values/gesture_data.xml b/app/src/debugNoMinify/res/values/gesture_data.xml
+index 483aeba..cf1bd1c 100644
+--- a/app/src/debugNoMinify/res/values/gesture_data.xml
++++ b/app/src/debugNoMinify/res/values/gesture_data.xml
+@@ -3,5 +3,5 @@
+     SPDX-License-Identifier: GPL-3.0-only
+ -->
+ <resources>
+-    <string name="gesture_data_provider_authority" translatable="false">helium314.keyboard.debug.provider</string>
++    <string name="gesture_data_provider_authority" translatable="false">com.chris.foldkeyboard.debug.provider</string>
+ </resources>
+diff --git a/app/src/debugNoMinify/res/values/strings.xml b/app/src/debugNoMinify/res/values/strings.xml
+index 73f1a95..d6ff8e7 100644
+--- a/app/src/debugNoMinify/res/values/strings.xml
++++ b/app/src/debugNoMinify/res/values/strings.xml
+@@ -3,7 +3,7 @@
+     SPDX-License-Identifier: GPL-3.0-only
+ -->
+ <resources>
+-    <string name="english_ime_name" translatable="false">HeliBoard debug</string>
+-    <string name="spell_checker_service_name" translatable="false">HeliBoard debug Spell Checker</string>
+-    <string name="ime_settings" translatable="false">HeliBoard debug Settings</string>
++    <string name="english_ime_name" translatable="false">FoldKeyboard debug</string>
++    <string name="spell_checker_service_name" translatable="false">FoldKeyboard debug Spell Checker</string>
++    <string name="ime_settings" translatable="false">FoldKeyboard debug Settings</string>
+ </resources>
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index d50a3c9..8c705ef 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -28,6 +28,16 @@ SPDX-License-Identifier: Apache-2.0 AND GPL-3.0-only
+             tools:targetApi="33">
+ 
+         <!-- Services -->
++        <service android:name="helium314.keyboard.fold.FoldPointerService"
++            android:label="@string/fold_pointer_service"
++            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
++            android:directBootAware="false"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="android.accessibilityservice.AccessibilityService" />
++            </intent-filter>
++            <meta-data android:name="android.accessibilityservice" android:resource="@xml/fold_pointer_service" />
++        </service>
+         <service android:name="LatinIME"
+                 android:label="@string/english_ime_name"
+                 android:permission="android.permission.BIND_INPUT_METHOD"
+@@ -51,6 +61,10 @@ SPDX-License-Identifier: Apache-2.0 AND GPL-3.0-only
+         </service>
+ 
+         <!-- Activities -->
++        <activity android:name="helium314.keyboard.fold.FoldTrackpadSettingsActivity"
++            android:label="@string/fold_settings"
++            android:theme="@android:style/Theme.Material.Light.NoActionBar"
++            android:exported="true" />
+         <activity android:name="helium314.keyboard.settings.SettingsActivity"
+                 android:theme="@style/platformActivityTheme"
+                 android:icon="@mipmap/ic_launcher"
+diff --git a/app/src/main/java/helium314/keyboard/fold/FoldLayoutPolicy.java b/app/src/main/java/helium314/keyboard/fold/FoldLayoutPolicy.java
+new file mode 100644
+index 0000000..0706ff8
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/FoldLayoutPolicy.java
+@@ -0,0 +1,23 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++/** Device-independent layout decisions, also exercised by the host-side tests. */
++public final class FoldLayoutPolicy {
++    private FoldLayoutPolicy() {}
++
++    public static boolean enabled(String mode, float widthDp, float heightDp, boolean locked) {
++        if (locked || "off".equals(mode) || widthDp < 480) return false;
++        return "always".equals(mode) || (widthDp >= 600 && heightDp >= 600);
++    }
++
++    public static int keyboardWidth(int availablePx, float density, float preferredDp) {
++        float phoneWidth = Math.max(240, Math.min(480, preferredDp)) * density;
++        return Math.max(1, Math.round(Math.min(availablePx * 0.45f, phoneWidth)));
++    }
++
++    public static float gain(float dx, float dy, long elapsedMs, float density, float sensitivity) {
++        double speedDpPerMs = Math.hypot(dx, dy) / Math.max(1, density) / Math.max(1, elapsedMs);
++        return Math.max(0.4f, Math.min(2.5f, sensitivity))
++                * (0.8f + 1.8f * (float) Math.min(1, speedDpPerMs / 1.5));
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/fold/FoldPointerService.java b/app/src/main/java/helium314/keyboard/fold/FoldPointerService.java
+new file mode 100644
+index 0000000..7ba56d7
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/FoldPointerService.java
+@@ -0,0 +1,355 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import android.accessibilityservice.AccessibilityService;
++import android.accessibilityservice.GestureDescription;
++import android.app.KeyguardManager;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.res.Configuration;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.PixelFormat;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.util.DisplayMetrics;
++import android.view.Display;
++import android.view.Gravity;
++import android.view.View;
++import android.view.WindowManager;
++import android.view.accessibility.AccessibilityEvent;
++import android.widget.Toast;
++import java.util.ArrayDeque;
++import helium314.keyboard.latin.R;
++
++/** Same-process bridge only: no receiver or binder accepts pointer commands from other apps. */
++public final class FoldPointerService extends AccessibilityService {
++    private static FoldPointerService instance;
++    private static boolean sessionVisible;
++    private static int imeTop, touchCount;
++    private static long lastTouch;
++    private final Handler handler = new Handler(Looper.getMainLooper());
++    private final ArrayDeque<PendingGesture> queue = new ArrayDeque<>();
++    private WindowManager wm;
++    private CursorView cursor;
++    private WindowManager.LayoutParams cursorParams;
++    private float x, y;
++    private int screenWidth, screenHeight, epoch;
++    private boolean attached, busy;
++    private boolean receiverRegistered;
++    private Path dragPath;
++    private float dragStartX, dragStartY;
++    private int dragPoints;
++    private long lastFailure;
++
++    private final BroadcastReceiver screenOff = new BroadcastReceiver() {
++        @Override public void onReceive(Context context, Intent intent) { hideSession(); }
++    };
++
++    public static boolean isConnected() { return instance != null; }
++
++    public static void setSession(boolean visible, int top, int displayId) {
++        sessionVisible = visible && displayId == Display.DEFAULT_DISPLAY;
++        imeTop = top;
++        if (instance != null) instance.updateVisibility();
++    }
++
++    public static void hideSession() {
++        sessionVisible = false;
++        touchCount = 0;
++        if (instance != null) instance.updateVisibility();
++    }
++
++    /** Covers the entire IME, including fingers typing on its right-hand keyboard. */
++    public static void setTouchCount(int count) {
++        touchCount = count;
++        lastTouch = SystemClock.uptimeMillis();
++    }
++
++    public static FoldPointerService connected() { return instance; }
++
++    @Override protected void onServiceConnected() {
++        super.onServiceConnected();
++        instance = this;
++        wm = getSystemService(WindowManager.class);
++        cursor = new CursorView(this);
++        int size = Math.round(30 * getResources().getDisplayMetrics().density);
++        cursorParams = new WindowManager.LayoutParams(size, size,
++                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
++                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
++                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
++                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
++                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
++                PixelFormat.TRANSLUCENT);
++        cursorParams.gravity = Gravity.TOP | Gravity.LEFT;
++        if (Build.VERSION.SDK_INT >= 28)
++            cursorParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
++        if (Build.VERSION.SDK_INT >= 30) cursorParams.setFitInsetsTypes(0);
++        if (Build.VERSION.SDK_INT >= 33)
++            registerReceiver(screenOff, new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED);
++        else registerReceiver(screenOff, new IntentFilter(Intent.ACTION_SCREEN_OFF));
++        receiverRegistered = true;
++        updateVisibility();
++    }
++
++    private boolean usable() {
++        KeyguardManager keyguard = getSystemService(KeyguardManager.class);
++        return sessionVisible && imeTop > 1 && keyguard != null && !keyguard.isKeyguardLocked();
++    }
++
++    @SuppressWarnings("deprecation")
++    private void updateVisibility() {
++        if (wm == null) return;
++        if (!usable()) {
++            epoch++;
++            queue.clear();
++            handler.removeCallbacks(pump);
++            busy = false;
++            dragPath = null;
++            if (attached) {
++                wm.removeView(cursor);
++                attached = false;
++            }
++            return;
++        }
++        DisplayMetrics metrics = new DisplayMetrics();
++        wm.getDefaultDisplay().getRealMetrics(metrics);
++        if (screenWidth != metrics.widthPixels || screenHeight != metrics.heightPixels) {
++            queue.clear();
++            dragPath = null;
++            screenWidth = metrics.widthPixels;
++            screenHeight = metrics.heightPixels;
++            x = screenWidth / 2f;
++            y = Math.min(imeTop, screenHeight) / 2f;
++        }
++        clampCursor();
++        positionCursor();
++        if (!attached) {
++            try {
++                wm.addView(cursor, cursorParams);
++                attached = true;
++            } catch (WindowManager.BadTokenException | IllegalStateException e) {
++                reportFailure();
++            }
++        }
++    }
++
++    private void clampCursor() {
++        x = Math.max(1, Math.min(screenWidth - 2, x));
++        y = Math.max(1, Math.min(Math.min(imeTop, screenHeight) - 2, y));
++    }
++
++    private void positionCursor() {
++        int inset = Math.round(2 * getResources().getDisplayMetrics().density);
++        cursorParams.x = Math.round(x) - inset;
++        cursorParams.y = Math.round(y) - inset;
++        if (attached) wm.updateViewLayout(cursor, cursorParams);
++        cursor.invalidate();
++    }
++
++    public void move(float dx, float dy) {
++        if (!usable() || !attached) return;
++        x += dx;
++        y += dy;
++        clampCursor();
++        if (dragPath != null && dragPoints < 2048) {
++            dragPath.lineTo(x, y);
++            dragPoints++;
++        }
++        positionCursor();
++    }
++
++    private static Path point(float x, float y) {
++        Path path = new Path();
++        path.moveTo(x, y);
++        return path;
++    }
++
++    public void click(int count) {
++        GestureDescription.Builder builder = new GestureDescription.Builder();
++        for (int i = 0; i < count; i++)
++            builder.addStroke(new GestureDescription.StrokeDescription(point(x, y), i * 120L, 45));
++        enqueue(builder.build(), null);
++    }
++
++    public void longClick() {
++        enqueue(new GestureDescription.Builder().addStroke(
++                new GestureDescription.StrokeDescription(point(x, y), 0, 650)).build(), null);
++    }
++
++    public void scroll(float dx, float dy) {
++        if (!usable()) return;
++        float endX = Math.max(1, Math.min(screenWidth - 2, x + dx * 2));
++        float endY = Math.max(1, Math.min(Math.min(imeTop, screenHeight) - 2, y + dy * 2));
++        if (Math.hypot(endX - x, endY - y) < 2) return;
++        Path path = point(x, y);
++        path.lineTo(endX, endY);
++        enqueue(new GestureDescription.Builder().addStroke(
++                new GestureDescription.StrokeDescription(path, 0, 300)).build(), null);
++    }
++
++    public void beginDrag() {
++        if (!usable()) return;
++        dragStartX = x;
++        dragStartY = y;
++        dragPoints = 0;
++        dragPath = point(x, y);
++        cursor.invalidate();
++    }
++
++    public void cancelDrag() {
++        dragPath = null;
++        if (cursor != null) cursor.invalidate();
++    }
++
++    /** Preview follows the finger; a held, continued touch replays the path after release. */
++    public void endDrag() {
++        if (dragPath == null) return;
++        Path path = new Path(dragPath);
++        path.lineTo(x, y);
++        GestureDescription.StrokeDescription hold = new GestureDescription.StrokeDescription(
++                point(dragStartX, dragStartY), 0, 600, true);
++        GestureDescription continuation = new GestureDescription.Builder().addStroke(
++                hold.continueStroke(path, 0, Math.min(1800, Math.max(300, dragPoints * 12L)), false)).build();
++        GestureDescription release = new GestureDescription.Builder().addStroke(
++                hold.continueStroke(point(dragStartX, dragStartY), 0, 1, false)).build();
++        enqueue(new GestureDescription.Builder().addStroke(hold).build(), continuation, release);
++        cancelDrag();
++    }
++
++    private void enqueue(GestureDescription first, GestureDescription continuation) {
++        enqueue(first, continuation, null);
++    }
++
++    private void enqueue(GestureDescription first, GestureDescription continuation, GestureDescription release) {
++        if (!usable() || !attached) return;
++        if (queue.size() >= 8) { reportFailure(); return; }
++        queue.add(new PendingGesture(first, continuation, release, SystemClock.uptimeMillis()));
++        handler.removeCallbacks(pump);
++        handler.postDelayed(pump, 70);
++    }
++
++    private final Runnable pump = new Runnable() {
++        @Override public void run() {
++            if (!usable() || busy || queue.isEmpty()) return;
++            long now = SystemClock.uptimeMillis();
++            while (!queue.isEmpty() && now - queue.peek().created > 2000) queue.remove();
++            if (queue.isEmpty()) return;
++            if (touchCount > 0 || now - lastTouch < 65) {
++                handler.postDelayed(this, 80);
++                return;
++            }
++            PendingGesture next = queue.remove();
++            busy = true;
++            dispatch(next.first, next.continuation, next.release, epoch);
++        }
++    };
++
++    private void dispatch(GestureDescription gesture, GestureDescription continuation,
++            GestureDescription release, int generation) {
++        boolean accepted = dispatchGesture(gesture, new GestureResultCallback() {
++            @Override public void onCompleted(GestureDescription completed) {
++                if (generation != epoch || !usable() || touchCount > 0) {
++                    // Lift an already-held drag even if the IME disappeared during its hold.
++                    // This is a continuation at the existing touch, never a new click.
++                    if (continuation != null && release != null) dispatchGesture(release, null, handler);
++                    if (generation == epoch) {
++                        busy = false;
++                        queue.clear();
++                    }
++                    return;
++                }
++                if (continuation != null && usable() && touchCount == 0) {
++                    dispatch(continuation, null, release, generation);
++                    return;
++                }
++                busy = false;
++                handler.post(pump);
++            }
++            @Override public void onCancelled(GestureDescription cancelled) {
++                if (generation != epoch) return;
++                busy = false;
++                queue.clear();
++                reportFailure();
++            }
++        }, handler);
++        if (!accepted) {
++            if (continuation == null && release != null) dispatchGesture(release, null, handler);
++            busy = false;
++            queue.clear();
++            reportFailure();
++        }
++    }
++
++    private void reportFailure() {
++        long now = SystemClock.uptimeMillis();
++        if (now - lastFailure > 3000) {
++            Toast.makeText(this, R.string.fold_gesture_failed, Toast.LENGTH_SHORT).show();
++            lastFailure = now;
++        }
++    }
++
++    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
++        // No node tree, text, or content is requested or retained.
++        if (!usable()) updateVisibility();
++    }
++    @Override public void onInterrupt() { hideSession(); }
++    @Override public void onConfigurationChanged(Configuration config) {
++        super.onConfigurationChanged(config);
++        hideSession(); // Wait for fresh IME geometry before accepting coordinates again.
++    }
++    @Override public void onDestroy() {
++        hideSession();
++        handler.removeCallbacksAndMessages(null);
++        if (instance == this) instance = null;
++        if (receiverRegistered) unregisterReceiver(screenOff);
++        super.onDestroy();
++    }
++
++    private static final class PendingGesture {
++        final GestureDescription first, continuation, release;
++        final long created;
++        PendingGesture(GestureDescription first, GestureDescription continuation, GestureDescription release, long created) {
++            this.first = first;
++            this.continuation = continuation;
++            this.release = release;
++            this.created = created;
++        }
++    }
++
++    private final class CursorView extends View {
++        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Path arrow = new Path();
++        CursorView(Context context) {
++            super(context);
++            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
++            arrow.moveTo(2, 2);
++            arrow.lineTo(4, 25);
++            arrow.lineTo(10, 18);
++            arrow.lineTo(15, 27);
++            arrow.lineTo(19, 25);
++            arrow.lineTo(14, 16);
++            arrow.lineTo(24, 15);
++            arrow.close();
++        }
++        @Override protected void onDraw(Canvas canvas) {
++            float density = getResources().getDisplayMetrics().density;
++            canvas.save();
++            canvas.scale(density, density);
++            paint.setStyle(Paint.Style.FILL);
++            paint.setColor(dragPath == null ? Color.WHITE : 0xFF79DFC8);
++            canvas.drawPath(arrow, paint);
++            paint.setStyle(Paint.Style.STROKE);
++            paint.setStrokeWidth(1.4f);
++            paint.setColor(0xFF15202B);
++            canvas.drawPath(arrow, paint);
++            canvas.restore();
++        }
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/fold/FoldTrackpadConfig.java b/app/src/main/java/helium314/keyboard/fold/FoldTrackpadConfig.java
+new file mode 100644
+index 0000000..3daf19d
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/FoldTrackpadConfig.java
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.res.Configuration;
++import helium314.keyboard.latin.utils.DeviceProtectedUtils;
++import helium314.keyboard.latin.utils.ResourceUtils;
++
++public final class FoldTrackpadConfig {
++    public static final String MODE = "fold_trackpad_mode";
++    public static final String WIDTH = "fold_trackpad_width_dp";
++    public static final String SPEED = "fold_trackpad_speed";
++    private static final String COVER_WIDTH = "fold_trackpad_cover_width_dp";
++    private FoldTrackpadConfig() {}
++
++    public static SharedPreferences prefs(Context context) {
++        return DeviceProtectedUtils.getSharedPreferences(context);
++    }
++
++    public static boolean isEnabled(Context context, boolean locked) {
++        Configuration config = context.getResources().getConfiguration();
++        float width = ResourceUtils.getDefaultKeyboardWidth(context)
++                / context.getResources().getDisplayMetrics().density;
++        return FoldLayoutPolicy.enabled(prefs(context).getString(MODE, "auto"),
++                width, config.screenHeightDp, locked);
++    }
++
++    public static void rememberCoverWidth(Context context) {
++        Configuration config = context.getResources().getConfiguration();
++        if (config.orientation != Configuration.ORIENTATION_PORTRAIT) return;
++        float width = ResourceUtils.getDefaultKeyboardWidth(context)
++                / context.getResources().getDisplayMetrics().density;
++        if (width < 240 || width >= 600) return;
++        SharedPreferences prefs = prefs(context);
++        if (Math.abs(prefs.getFloat(COVER_WIDTH, 360) - width) > 1)
++            prefs.edit().putFloat(COVER_WIDTH, width).apply();
++    }
++
++    public static int keyboardWidth(Context context, int available) {
++        SharedPreferences prefs = prefs(context);
++        float preferred = prefs.getInt(WIDTH, 0);
++        if (preferred == 0) preferred = prefs.getFloat(COVER_WIDTH, 360);
++        return FoldLayoutPolicy.keyboardWidth(available,
++                context.getResources().getDisplayMetrics().density, preferred);
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/fold/FoldTrackpadSettingsActivity.java b/app/src/main/java/helium314/keyboard/fold/FoldTrackpadSettingsActivity.java
+new file mode 100644
+index 0000000..a0b4d69
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/FoldTrackpadSettingsActivity.java
+@@ -0,0 +1,125 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.os.Bundle;
++import android.provider.Settings;
++import android.view.View;
++import android.widget.Button;
++import android.widget.LinearLayout;
++import android.widget.RadioButton;
++import android.widget.RadioGroup;
++import android.widget.ScrollView;
++import android.widget.SeekBar;
++import android.widget.TextView;
++import helium314.keyboard.latin.R;
++
++/** Available from both the regular settings and Android's accessibility service settings. */
++public final class FoldTrackpadSettingsActivity extends Activity {
++    private TextView status;
++    @Override public void onCreate(Bundle state) {
++        super.onCreate(state);
++        setTitle(R.string.fold_settings);
++        ScrollView scroll = new ScrollView(this);
++        LinearLayout content = new LinearLayout(this);
++        content.setOrientation(LinearLayout.VERTICAL);
++        int padding = Math.round(20 * getResources().getDisplayMetrics().density);
++        content.setPadding(padding, padding, padding, padding);
++        scroll.addView(content);
++        setContentView(scroll);
++        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
++            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
++                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
++            return insets;
++        });
++        text(content, R.string.fold_settings, 25);
++        text(content, R.string.fold_intro, 16);
++        status = text(content, R.string.fold_enable_pointer, 16);
++        Button enable = new Button(this);
++        enable.setText(R.string.fold_enable_pointer);
++        enable.setOnClickListener(v -> {
++            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
++        });
++        content.addView(enable);
++        text(content, R.string.fold_mode, 19);
++        RadioGroup modes = new RadioGroup(this);
++        String[] values = {"auto", "always", "off"};
++        int[] labels = {R.string.fold_auto, R.string.fold_always, R.string.fold_off};
++        String current = FoldTrackpadConfig.prefs(this).getString(FoldTrackpadConfig.MODE, "auto");
++        for (int i = 0; i < values.length; i++) {
++            RadioButton button = new RadioButton(this);
++            button.setId(View.generateViewId());
++            button.setText(labels[i]);
++            button.setTag(values[i]);
++            modes.addView(button);
++            if (values[i].equals(current)) modes.check(button.getId());
++        }
++        modes.setOnCheckedChangeListener((group, id) -> {
++            RadioButton button = group.findViewById(id);
++            FoldTrackpadConfig.prefs(this).edit().putString(FoldTrackpadConfig.MODE,
++                    (String) button.getTag()).apply();
++        });
++        content.addView(modes);
++        TextView width = text(content, R.string.fold_width, 19);
++        SeekBar widthSlider = new SeekBar(this);
++        widthSlider.setContentDescription(getString(R.string.fold_width));
++        widthSlider.setMax(24);
++        int storedWidth = FoldTrackpadConfig.prefs(this).getInt(FoldTrackpadConfig.WIDTH, 0);
++        widthSlider.setProgress(storedWidth == 0 ? 0 : (storedWidth - 240) / 10);
++        updateWidthLabel(width, storedWidth);
++        widthSlider.setOnSeekBarChangeListener(new SliderListener() {
++            @Override public void onProgressChanged(SeekBar bar, int progress, boolean user) {
++                if (!user) return;
++                int dp = progress == 0 ? 0 : 240 + progress * 10;
++                FoldTrackpadConfig.prefs(FoldTrackpadSettingsActivity.this).edit()
++                        .putInt(FoldTrackpadConfig.WIDTH, dp).apply();
++                updateWidthLabel(width, dp);
++            }
++        });
++        content.addView(widthSlider);
++        TextView speed = text(content, R.string.fold_speed, 19);
++        SeekBar speedSlider = new SeekBar(this);
++        speedSlider.setContentDescription(getString(R.string.fold_speed));
++        speedSlider.setMax(21);
++        float storedSpeed = FoldTrackpadConfig.prefs(this).getFloat(FoldTrackpadConfig.SPEED, 1f);
++        speedSlider.setProgress(Math.round((storedSpeed - 0.4f) * 10));
++        speed.setText(getString(R.string.fold_speed_value, storedSpeed));
++        speedSlider.setOnSeekBarChangeListener(new SliderListener() {
++            @Override public void onProgressChanged(SeekBar bar, int progress, boolean user) {
++                if (!user) return;
++                float value = 0.4f + progress / 10f;
++                FoldTrackpadConfig.prefs(FoldTrackpadSettingsActivity.this).edit()
++                        .putFloat(FoldTrackpadConfig.SPEED, value).apply();
++                speed.setText(getString(R.string.fold_speed_value, value));
++            }
++        });
++        content.addView(speedSlider);
++        text(content, R.string.fold_gestures, 16);
++    }
++
++    private void updateWidthLabel(TextView label, int dp) {
++        label.setText(dp == 0 ? getString(R.string.fold_width_auto) : getString(R.string.fold_width_value, dp));
++    }
++    private TextView text(LinearLayout parent, int resource, int size) {
++        TextView view = new TextView(this);
++        view.setText(resource);
++        view.setTextSize(size);
++        int padding = Math.round(8 * getResources().getDisplayMetrics().density);
++        view.setPadding(0, padding, 0, padding);
++        parent.addView(view);
++        return view;
++    }
++    @Override protected void onResume() {
++        super.onResume();
++        status.setText(FoldPointerService.isConnected() ? R.string.fold_connected : R.string.fold_disconnected);
++    }
++    @Override protected void onPause() {
++        helium314.keyboard.keyboard.KeyboardSwitcher.getInstance().setThemeNeedsReload();
++        super.onPause();
++    }
++    private abstract static class SliderListener implements SeekBar.OnSeekBarChangeListener {
++        @Override public void onStartTrackingTouch(SeekBar bar) {}
++        @Override public void onStopTrackingTouch(SeekBar bar) {}
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/fold/TrackpadGestureEngine.java b/app/src/main/java/helium314/keyboard/fold/TrackpadGestureEngine.java
+new file mode 100644
+index 0000000..a2be38e
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/TrackpadGestureEngine.java
+@@ -0,0 +1,118 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++/** No Android dependencies. Injection is requested only after all trackpad fingers lift. */
++public final class TrackpadGestureEngine {
++    public interface Sink {
++        void move(float dx, float dy);
++        void click(int count);
++        void longClick();
++        void scroll(float dx, float dy);
++        void beginDrag();
++        void endDrag();
++        void cancelDrag();
++    }
++
++    private final Sink sink;
++    private final float slop, density, sensitivity;
++    private final long doubleTapMs, longPressMs;
++    private boolean active, moved, multi, draining, dragging, secondTap, forceDrag;
++    private float downX, downY, x, y, scrollX, scrollY;
++    private long downTime, lastTime, pendingTap = -1;
++
++    public TrackpadGestureEngine(Sink sink, float slop, float density, float sensitivity,
++            long doubleTapMs, long longPressMs) {
++        this.sink = sink;
++        this.slop = slop;
++        this.density = density;
++        this.sensitivity = sensitivity;
++        this.doubleTapMs = doubleTapMs;
++        this.longPressMs = longPressMs;
++    }
++
++    public void armDrag() { forceDrag = true; }
++
++    public void down(float x, float y, long time) {
++        flushTap(time);
++        secondTap = pendingTap >= 0;
++        pendingTap = -1;
++        active = true;
++        moved = multi = draining = dragging = false;
++        downX = this.x = x;
++        downY = this.y = y;
++        downTime = lastTime = time;
++        scrollX = scrollY = 0;
++        if (forceDrag) {
++            dragging = true;
++            forceDrag = false;
++            sink.beginDrag();
++        }
++    }
++
++    public void pointersChanged(int remaining, float centroidX, float centroidY, long time) {
++        if (!active) return;
++        if (remaining > 2) { cancel(); return; }
++        if (remaining == 2) {
++            if (dragging) sink.cancelDrag();
++            dragging = false;
++            multi = true;
++            secondTap = false;
++        } else if (multi) draining = true;
++        x = centroidX;
++        y = centroidY;
++        lastTime = time;
++    }
++
++    public void move(float nextX, float nextY, long time) {
++        if (!active || draining) return;
++        float dx = nextX - x, dy = nextY - y;
++        if (multi) {
++            scrollX += dx;
++            scrollY += dy;
++        } else {
++            boolean crossesSlop = Math.hypot(nextX - downX, nextY - downY) > slop;
++            if (!moved && crossesSlop) {
++                if (!dragging && (secondTap || time - downTime >= longPressMs)) {
++                    dragging = true;
++                    sink.beginDrag();
++                }
++                moved = true;
++            }
++            if (moved || dragging) {
++                float gain = FoldLayoutPolicy.gain(dx, dy, time - lastTime, density, sensitivity);
++                sink.move(dx * gain, dy * gain);
++            }
++        }
++        x = nextX;
++        y = nextY;
++        lastTime = time;
++    }
++
++    public void up(long time) {
++        if (!active) return;
++        active = false;
++        if (multi) {
++            if (Math.hypot(scrollX, scrollY) > slop) sink.scroll(scrollX, scrollY);
++        } else if (dragging) {
++            sink.endDrag();
++        } else if (!moved) {
++            if (time - downTime >= longPressMs) sink.longClick();
++            else if (secondTap) sink.click(2);
++            else pendingTap = time;
++        }
++        dragging = false;
++    }
++
++    public void flushTap(long time) {
++        if (!active && pendingTap >= 0 && time - pendingTap >= doubleTapMs) {
++            pendingTap = -1;
++            sink.click(1);
++        }
++    }
++
++    public void cancel() {
++        if (dragging) sink.cancelDrag();
++        active = dragging = forceDrag = secondTap = false;
++        pendingTap = -1;
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/fold/TrackpadPanel.java b/app/src/main/java/helium314/keyboard/fold/TrackpadPanel.java
+new file mode 100644
+index 0000000..fa33568
+--- /dev/null
++++ b/app/src/main/java/helium314/keyboard/fold/TrackpadPanel.java
+@@ -0,0 +1,167 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import android.annotation.SuppressLint;
++import android.content.Context;
++import android.content.Intent;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.os.SystemClock;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.widget.Button;
++import android.widget.LinearLayout;
++import helium314.keyboard.latin.R;
++
++public final class TrackpadPanel extends LinearLayout {
++    private final Pad pad;
++    public TrackpadPanel(Context context) {
++        super(context);
++        setOrientation(VERTICAL);
++        setLayoutDirection(LAYOUT_DIRECTION_LTR);
++        setBackgroundColor(0xFF18212A);
++        LinearLayout actions = new LinearLayout(context);
++        actions.setGravity(Gravity.CENTER);
++        Button settings = new Button(context);
++        settings.setText(R.string.fold_settings);
++        settings.setOnClickListener(v -> context.startActivity(new Intent(context,
++                FoldTrackpadSettingsActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
++        Button drag = new Button(context);
++        drag.setText(R.string.fold_drag);
++        pad = new Pad(context);
++        drag.setOnClickListener(v -> {
++            pad.engine.armDrag();
++            pad.dragArmed = true;
++            pad.invalidate();
++        });
++        actions.addView(settings, new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1));
++        actions.addView(drag, new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1));
++        addView(actions, new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++        addView(pad, new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
++    }
++
++    public void cancel() { pad.cancel(); }
++
++    private static final class Pad extends View implements TrackpadGestureEngine.Sink {
++        private final TrackpadGestureEngine engine;
++        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private boolean dragArmed;
++        private final Runnable flush = () -> engineFlush();
++
++        Pad(Context context) {
++            super(context);
++            setFocusable(true);
++            setContentDescription(context.getString(R.string.fold_pad_description));
++            ViewConfiguration config = ViewConfiguration.get(context);
++            engine = new TrackpadGestureEngine(this, config.getScaledTouchSlop(),
++                    getResources().getDisplayMetrics().density,
++                    FoldTrackpadConfig.prefs(context).getFloat(FoldTrackpadConfig.SPEED, 1f),
++                    ViewConfiguration.getDoubleTapTimeout(), ViewConfiguration.getLongPressTimeout());
++        }
++
++        private void engineFlush() { engine.flushTap(SystemClock.uptimeMillis()); }
++        void cancel() {
++            removeCallbacks(flush);
++            engine.cancel();
++            dragArmed = false;
++            invalidate();
++        }
++
++        @SuppressLint("ClickableViewAccessibility")
++        @Override public boolean onTouchEvent(MotionEvent event) {
++            getParent().requestDisallowInterceptTouchEvent(true);
++            float cx = 0, cy = 0;
++            int count = 0;
++            for (int i = 0; i < event.getPointerCount(); i++) {
++                if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP && i == event.getActionIndex()) continue;
++                cx += event.getX(i);
++                cy += event.getY(i);
++                count++;
++            }
++            cx /= Math.max(1, count);
++            cy /= Math.max(1, count);
++            long time = event.getEventTime();
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_DOWN:
++                    removeCallbacks(flush);
++                    engine.down(cx, cy, time);
++                    break;
++                case MotionEvent.ACTION_POINTER_DOWN:
++                case MotionEvent.ACTION_POINTER_UP:
++                    engine.pointersChanged(count, cx, cy, time);
++                    break;
++                case MotionEvent.ACTION_MOVE:
++                    engine.move(cx, cy, time);
++                    break;
++                case MotionEvent.ACTION_UP:
++                    engine.up(time);
++                    dragArmed = false;
++                    postDelayed(flush, ViewConfiguration.getDoubleTapTimeout() + 1L);
++                    break;
++                case MotionEvent.ACTION_CANCEL:
++                    cancel();
++                    break;
++            }
++            invalidate();
++            return true;
++        }
++
++        @Override public boolean performClick() {
++            super.performClick();
++            click(1);
++            return true;
++        }
++        @Override protected void onDetachedFromWindow() { cancel(); super.onDetachedFromWindow(); }
++        @Override protected void onWindowVisibilityChanged(int visibility) {
++            super.onWindowVisibilityChanged(visibility);
++            if (visibility != VISIBLE) cancel();
++        }
++        @Override protected void onDraw(Canvas canvas) {
++            float density = getResources().getDisplayMetrics().density;
++            paint.setColor(0xFF293541);
++            for (float px = 18 * density; px < getWidth(); px += 24 * density)
++                for (float py = 18 * density; py < getHeight(); py += 24 * density)
++                    canvas.drawCircle(px, py, density, paint);
++            paint.setTextAlign(Paint.Align.CENTER);
++            paint.setTextSize(18 * density);
++            paint.setColor(0xFFD9E6F0);
++            int label = !FoldPointerService.isConnected() ? R.string.fold_enable_pointer
++                    : dragArmed ? R.string.fold_drag_armed : R.string.fold_trackpad;
++            canvas.drawText(getContext().getString(label), getWidth() / 2f, getHeight() / 2f, paint);
++            paint.setTextSize(12 * density);
++            paint.setColor(0xFFA8BACB);
++            canvas.drawText(getContext().getString(R.string.fold_pad_hint), getWidth() / 2f,
++                    getHeight() / 2f + 26 * density, paint);
++        }
++        @Override public void move(float dx, float dy) {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.move(dx, dy);
++        }
++        @Override public void click(int count) {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.click(count);
++        }
++        @Override public void longClick() {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.longClick();
++        }
++        @Override public void scroll(float dx, float dy) {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.scroll(dx, dy);
++        }
++        @Override public void beginDrag() {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.beginDrag();
++        }
++        @Override public void endDrag() {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.endDrag();
++        }
++        @Override public void cancelDrag() {
++            FoldPointerService service = FoldPointerService.connected();
++            if (service != null) service.cancelDrag();
++        }
++    }
++}
+diff --git a/app/src/main/java/helium314/keyboard/keyboard/KeyboardSwitcher.java b/app/src/main/java/helium314/keyboard/keyboard/KeyboardSwitcher.java
+index 3bf890c..3182197 100644
+--- a/app/src/main/java/helium314/keyboard/keyboard/KeyboardSwitcher.java
++++ b/app/src/main/java/helium314/keyboard/keyboard/KeyboardSwitcher.java
+@@ -91,6 +91,8 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+     private int mCurrentUiMode;
+     private int mCurrentOrientation;
+     private int mCurrentDpi;
++    private int mCurrentWidthPx;
++    private int mCurrentHeightPx;
+     private boolean mThemeNeedsReload;
+ 
+     @SuppressLint("StaticFieldLeak") // this is a keyboard, we want to keep it alive in background
+@@ -135,6 +137,8 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+                 || mThemeContext == null
+                 || !keyboardTheme.equals(mKeyboardTheme)
+                 || mCurrentDpi != res.getDisplayMetrics().densityDpi
++                || mCurrentWidthPx != res.getDisplayMetrics().widthPixels
++                || mCurrentHeightPx != res.getDisplayMetrics().heightPixels
+                 || mCurrentOrientation != res.getConfiguration().orientation
+                 || (mCurrentUiMode & Configuration.UI_MODE_NIGHT_MASK) != (res.getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                 || !mThemeContext.getResources().equals(res)
+@@ -145,6 +149,8 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+             mCurrentUiMode = res.getConfiguration().uiMode;
+             mCurrentOrientation = res.getConfiguration().orientation;
+             mCurrentDpi = res.getDisplayMetrics().densityDpi;
++            mCurrentWidthPx = res.getDisplayMetrics().widthPixels;
++            mCurrentHeightPx = res.getDisplayMetrics().heightPixels;
+             KeyboardLayoutSet.Companion.onKeyboardThemeChanged();
+             return true;
+         }
+@@ -489,6 +495,7 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+     }
+ 
+     public void setOneHandedModeEnabled(boolean enabled, boolean force) {
++        if (Settings.getValues().mFoldTrackpadEnabled) enabled = false;
+         if (!force && mKeyboardViewWrapper.getOneHandedModeEnabled() == enabled) {
+             return;
+         }
+@@ -511,6 +518,7 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+ 
+     @Override
+     public void setFloatingKeyboardEnabled(boolean enabled) {
++        if (Settings.getValues().mFoldTrackpadEnabled) return;
+         if (enabled != Settings.getValues().mIsFloatingKeyboard)
+             // mIsFloatingKeyboard is always disabled when device is locked, and we shouldn't mess up the setting
+             SettingsKt.setFloatingKeyboardEnabled(mThemeContext, enabled);
+@@ -520,6 +528,7 @@ public final class KeyboardSwitcher implements KeyboardState.SwitchActions {
+     }
+ 
+     public void toggleSplitKeyboardMode() {
++        if (Settings.getValues().mFoldTrackpadEnabled) return;
+         final Settings settings = Settings.getInstance();
+         settings.writeSplitKeyboardEnabled(
+             !settings.getCurrent().mIsSplitKeyboardEnabled,
+diff --git a/app/src/main/java/helium314/keyboard/latin/InputView.java b/app/src/main/java/helium314/keyboard/latin/InputView.java
+index 89660b0..83aa457 100644
+--- a/app/src/main/java/helium314/keyboard/latin/InputView.java
++++ b/app/src/main/java/helium314/keyboard/latin/InputView.java
+@@ -12,6 +12,7 @@ import android.graphics.Rect;
+ import android.util.AttributeSet;
+ import android.view.MotionEvent;
+ import android.view.View;
++import android.view.Gravity;
+ import android.widget.FrameLayout;
+ 
+ import androidx.core.view.ViewKt;
+@@ -24,6 +25,9 @@ import helium314.keyboard.latin.suggestions.MoreSuggestionsView;
+ import helium314.keyboard.latin.suggestions.SuggestionStripView;
+ import helium314.keyboard.latin.utils.FloatingKeyboardUtils;
+ import kotlin.Unit;
++import helium314.keyboard.fold.FoldTrackpadConfig;
++import helium314.keyboard.fold.FoldPointerService;
++import helium314.keyboard.fold.TrackpadPanel;
+ 
+ 
+ public final class InputView extends FrameLayout {
+@@ -32,6 +36,7 @@ public final class InputView extends FrameLayout {
+     private KeyboardTopPaddingForwarder mKeyboardTopPaddingForwarder;
+     private MoreSuggestionsViewCanceler mMoreSuggestionsViewCanceler;
+     private MotionEventForwarder<?, ?> mActiveForwarder;
++    private TrackpadPanel mTrackpad;
+ 
+     public InputView(final Context context, final AttributeSet attrs) {
+         super(context, attrs, 0);
+@@ -47,9 +52,69 @@ public final class InputView extends FrameLayout {
+                 mMainKeyboardView, suggestionStripView);
+         mMoreSuggestionsViewCanceler = new MoreSuggestionsViewCanceler(
+                 mMainKeyboardView, suggestionStripView);
++        mTrackpad = new TrackpadPanel(getContext());
++        mTrackpad.setVisibility(GONE);
++        addView(mTrackpad, new FrameLayout.LayoutParams(0, 0, Gravity.LEFT | Gravity.BOTTOM));
+         ViewKt.doOnNextLayout(this, this::onNextLayout);
+     }
+ 
++    @Override
++    protected void onMeasure(int widthSpec, int heightSpec) {
++        if (mTrackpad == null) { super.onMeasure(widthSpec, heightSpec); return; }
++        View keyboard = findViewById(R.id.main_keyboard_frame);
++        boolean enabled = Settings.getValues().mFoldTrackpadEnabled && keyboard.getVisibility() == VISIBLE;
++        int available = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
++        int keyboardWidth = FoldTrackpadConfig.keyboardWidth(getContext(), available);
++        FrameLayout.LayoutParams keys = (FrameLayout.LayoutParams) keyboard.getLayoutParams();
++        keys.width = enabled ? keyboardWidth : LayoutParams.MATCH_PARENT;
++        keys.gravity = Gravity.RIGHT | Gravity.BOTTOM;
++        FrameLayout.LayoutParams pad = (FrameLayout.LayoutParams) mTrackpad.getLayoutParams();
++        pad.width = Math.max(0, available - keyboardWidth);
++        pad.height = 0; // InputView itself is full-screen; only the keyboard-height band is a trackpad.
++        mTrackpad.setVisibility(enabled ? VISIBLE : GONE);
++        super.onMeasure(widthSpec, heightSpec);
++        if (enabled) {
++            pad.height = keyboard.getMeasuredHeight();
++            mTrackpad.measure(MeasureSpec.makeMeasureSpec(pad.width, MeasureSpec.EXACTLY),
++                    MeasureSpec.makeMeasureSpec(pad.height, MeasureSpec.EXACTLY));
++        }
++    }
++
++    @Override
++    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
++        super.onLayout(changed, left, top, right, bottom);
++        updateFoldSession();
++    }
++
++    public void updateFoldSession() {
++        View keyboard = findViewById(R.id.main_keyboard_frame);
++        boolean active = Settings.getValues().mFoldTrackpadEnabled && isShown()
++                && keyboard.isShown() && keyboard.getHeight() > 0;
++        int[] location = new int[2];
++        keyboard.getLocationOnScreen(location);
++        FoldPointerService.setSession(active, location[1], getDisplay() == null ? -1 : getDisplay().getDisplayId());
++    }
++
++    public void hideFoldSession() {
++        if (mTrackpad != null) mTrackpad.cancel();
++        FoldPointerService.hideSession();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        hideFoldSession();
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    public boolean dispatchTouchEvent(MotionEvent event) {
++        int count = event.getPointerCount();
++        if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) count = 0;
++        else if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) count--;
++        FoldPointerService.setTouchCount(count);
++        return super.dispatchTouchEvent(event);
++    }
++
+     public void setKeyboardTopPadding(final int keyboardTopPadding) {
+         mKeyboardTopPaddingForwarder.setKeyboardTopPadding(keyboardTopPadding);
+     }
+diff --git a/app/src/main/java/helium314/keyboard/latin/LatinIME.java b/app/src/main/java/helium314/keyboard/latin/LatinIME.java
+index 62168ab..1063ad6 100644
+--- a/app/src/main/java/helium314/keyboard/latin/LatinIME.java
++++ b/app/src/main/java/helium314/keyboard/latin/LatinIME.java
+@@ -1002,6 +1002,11 @@ public class LatinIME extends InputMethodService implements
+     @Override
+     public void onWindowShown() {
+         super.onWindowShown();
++        helium314.keyboard.fold.FoldTrackpadConfig.rememberCoverWidth(this);
++        if (mInputView instanceof InputView) {
++            final InputView view = (InputView) mInputView;
++            view.post(view::updateFoldSession);
++        }
+         if (isInputViewShown()) {
+             if (mInputView != null && Settings.getValues().mIsFloatingKeyboard)
+                 FloatingKeyboardUtils.setFloating(mInputView);
+@@ -1013,6 +1018,7 @@ public class LatinIME extends InputMethodService implements
+     @Override
+     public void onWindowHidden() {
+         super.onWindowHidden();
++        if (mInputView instanceof InputView) ((InputView) mInputView).hideFoldSession();
+         Log.i(TAG, "onWindowHidden");
+         final MainKeyboardView mainKeyboardView = mKeyboardSwitcher.getMainKeyboardView();
+         if (mainKeyboardView != null) {
+@@ -1210,7 +1216,7 @@ public class LatinIME extends InputMethodService implements
+         if (visibleKeyboardView.isShown()) {
+             int touchLeft = 0;
+             int touchTop = mKeyboardSwitcher.isShowingPopupKeysPanel() ? 0 : visibleTopY;
+-            int touchRight = visibleKeyboardView.getWidth();
++            int touchRight = Settings.getValues().mFoldTrackpadEnabled ? mInputView.getWidth() : visibleKeyboardView.getWidth();
+             int touchBottom = inputHeight + EXTENDED_TOUCHABLE_REGION_HEIGHT; // Extend touchable region below the keyboard.
+             if (mSettings.getCurrent().mIsFloatingKeyboard) {
+                 var xy = FloatingKeyboardUtils.readPosition(this, Integer.MAX_VALUE, Integer.MAX_VALUE);
+@@ -1264,6 +1270,7 @@ public class LatinIME extends InputMethodService implements
+ 
+     @Override
+     public boolean onEvaluateFullscreenMode() {
++        if (mSettings.getCurrent().mFoldTrackpadEnabled) return false;
+         if (isImeSuppressedByHardwareKeyboard() || mSettings.getCurrent().mIsFloatingKeyboard) {
+             // If there is a hardware keyboard or we're floating, disable full screen mode.
+             return false;
+diff --git a/app/src/main/java/helium314/keyboard/latin/settings/SettingsValues.java b/app/src/main/java/helium314/keyboard/latin/settings/SettingsValues.java
+index dc7b947..560572c 100644
+--- a/app/src/main/java/helium314/keyboard/latin/settings/SettingsValues.java
++++ b/app/src/main/java/helium314/keyboard/latin/settings/SettingsValues.java
+@@ -143,6 +143,7 @@ public class SettingsValues {
+     public final boolean mEmojiKeyFit;
+     public final PunctuationSuggestions mPunctuationSuggestions;
+     public final boolean mIsFloatingKeyboard;
++    public final boolean mFoldTrackpadEnabled;
+     public final int mFloatingWidth;
+     public final int mFloatingHeight;
+     public final int mKeypressVibrationDuration;
+@@ -184,6 +185,7 @@ public class SettingsValues {
+ 
+         // Get the settings preferences
+         mIsLocked = IsLockedCompatKt.isDeviceLocked(context);
++        mFoldTrackpadEnabled = helium314.keyboard.fold.FoldTrackpadConfig.isEnabled(context, mIsLocked);
+         // we want to hide the toolbar / suggestion strip entirely if device is locked
+         mToolbarMode = mIsLocked ? ToolbarMode.HIDDEN : Settings.readToolbarMode(prefs);
+         mToolbarSwipeDownToHide = prefs.getBoolean(Settings.PREF_TOOLBAR_SWIPE_DOWN_TO_HIDE, Defaults.PREF_TOOLBAR_SWIPE_DOWN_TO_HIDE);
+@@ -240,7 +242,7 @@ public class SettingsValues {
+         boolean isLandscape = mDisplayOrientation == Configuration.ORIENTATION_LANDSCAPE;
+         float displayWidthDp = TypedValueCompat.pxToDp(res.getDisplayMetrics().widthPixels, res.getDisplayMetrics());
+         boolean isFolded = FoldableUtils.INSTANCE.isFolded();
+-        mIsSplitKeyboardEnabled = Settings.readSplitKeyboardEnabled(prefs, isLandscape, isFolded);
++        mIsSplitKeyboardEnabled = !mFoldTrackpadEnabled && Settings.readSplitKeyboardEnabled(prefs, isLandscape, isFolded);
+         // determine spacerWidth from display width and scale setting
+         mSplitKeyboardSpacerRelativeWidth = mIsSplitKeyboardEnabled
+                 ? Math.min(Math.max((displayWidthDp - 600) / 600f + 0.15f, 0.15f), 0.35f) * Settings.readSplitSpacerScale(prefs, isLandscape, isFolded)
+@@ -285,12 +287,12 @@ public class SettingsValues {
+         mClipboardHistoryRetentionTime = prefs.getInt(Settings.PREF_CLIPBOARD_HISTORY_RETENTION_TIME, Defaults.PREF_CLIPBOARD_HISTORY_RETENTION_TIME);
+         mClipboardHistoryPinnedFirst = prefs.getBoolean(Settings.PREF_CLIPBOARD_HISTORY_PINNED_FIRST, Defaults.PREF_CLIPBOARD_HISTORY_PINNED_FIRST);
+ 
+-        mIsFloatingKeyboard = !mIsLocked && SettingsKt.isFloatingKeyboardEnabled(context);
++        mIsFloatingKeyboard = !mFoldTrackpadEnabled && !mIsLocked && SettingsKt.isFloatingKeyboardEnabled(context);
+         mFloatingWidth = SettingsKt.readFloatingWidth(context);
+         mFloatingHeight = mIsFloatingKeyboard && mHasHardwareKeyboard && prefs.getBoolean(Settings.PREF_SHOW_ONLY_TOOLBAR_WITH_HARDWARE_KEYBOARD, Defaults.PREF_SHOW_ONLY_TOOLBAR_WITH_HARDWARE_KEYBOARD)
+                           ? 0 : SettingsKt.readFloatingHeight(context);
+         mKeyboardHeightScale = mIsFloatingKeyboard ? 1f : Settings.readHeightScale(prefs, isLandscape, isFolded);
+-        mOneHandedModeEnabled = !mIsFloatingKeyboard && Settings.readOneHandedModeEnabled(prefs, isLandscape, mIsSplitKeyboardEnabled, isFolded);
++        mOneHandedModeEnabled = !mFoldTrackpadEnabled && !mIsFloatingKeyboard && Settings.readOneHandedModeEnabled(prefs, isLandscape, mIsSplitKeyboardEnabled, isFolded);
+         mOneHandedModeGravity = Settings.readOneHandedModeGravity(prefs, isLandscape, mIsSplitKeyboardEnabled, isFolded);
+         if (mOneHandedModeEnabled) {
+             final float baseScale = res.getFraction(R.fraction.config_one_handed_mode_width, 1, 1);
+diff --git a/app/src/main/java/helium314/keyboard/latin/utils/ResourceUtils.java b/app/src/main/java/helium314/keyboard/latin/utils/ResourceUtils.java
+index a4ed0bc..c02b986 100644
+--- a/app/src/main/java/helium314/keyboard/latin/utils/ResourceUtils.java
++++ b/app/src/main/java/helium314/keyboard/latin/utils/ResourceUtils.java
+@@ -32,6 +32,8 @@ public final class ResourceUtils {
+     }
+ 
+     public static int getKeyboardWidth(final Context ctx, final SettingsValues settingsValues) {
++        if (settingsValues.mFoldTrackpadEnabled)
++            return helium314.keyboard.fold.FoldTrackpadConfig.keyboardWidth(ctx, getDefaultKeyboardWidth(ctx));
+         // Floating keyboard width takes priority
+         if (settingsValues.mIsFloatingKeyboard) {
+             return settingsValues.mFloatingWidth;
+@@ -69,6 +71,13 @@ public final class ResourceUtils {
+     }
+ 
+     public static int getKeyboardHeight(Resources res, SettingsValues settingsValues) {
++        if (settingsValues.mFoldTrackpadEnabled) {
++            // Phone row height, independent of tablet-specific resource qualifiers.
++            float density = res.getDisplayMetrics().density;
++            float rows = 205.6f * density * (settingsValues.mShowsNumberRow ? 1.33f : 1f);
++            return Math.round(Math.min(rows * settingsValues.mKeyboardHeightScale,
++                    res.getDisplayMetrics().heightPixels * 0.45f));
++        }
+         if (settingsValues.mIsFloatingKeyboard) {
+             return settingsValues.mFloatingHeight;
+         }
+diff --git a/app/src/main/java/helium314/keyboard/settings/screens/MainSettingsScreen.kt b/app/src/main/java/helium314/keyboard/settings/screens/MainSettingsScreen.kt
+index 3e9b49c..399ae4d 100644
+--- a/app/src/main/java/helium314/keyboard/settings/screens/MainSettingsScreen.kt
++++ b/app/src/main/java/helium314/keyboard/settings/screens/MainSettingsScreen.kt
+@@ -2,6 +2,8 @@
+ package helium314.keyboard.settings.screens
+ 
+ import androidx.compose.foundation.layout.Column
++import android.content.Intent
++import helium314.keyboard.fold.FoldTrackpadSettingsActivity
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.WindowInsetsSides
+ import androidx.compose.foundation.layout.only
+@@ -50,10 +52,16 @@ fun MainSettingsScreen(
+         settings = emptyList(),
+     ) {
+         val enabledSubtypes = SubtypeSettings.getEnabledSubtypes(true)
++        val context = LocalContext.current
+         Scaffold(contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)) { innerPadding ->
+             Column(
+                 Modifier.verticalScroll(rememberScrollState()).then(Modifier.padding(innerPadding))
+             ) {
++                Preference(
++                    name = stringResource(R.string.fold_settings),
++                    onClick = { context.startActivity(Intent(context, FoldTrackpadSettingsActivity::class.java)) },
++                    icon = R.drawable.ic_settings_preferences
++                ) { NextScreenIcon() }
+                 Preference(
+                     name = stringResource(R.string.language_and_layouts_title),
+                     description = enabledSubtypes.joinToString(", ") { it.displayName() },
+diff --git a/app/src/main/res/values-de/fold_trackpad.xml b/app/src/main/res/values-de/fold_trackpad.xml
+new file mode 100644
+index 0000000..6934202
+--- /dev/null
++++ b/app/src/main/res/values-de/fold_trackpad.xml
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- SPDX-License-Identifier: GPL-3.0-only -->
++<resources>
++    <string name="fold_settings">Fold Trackpad</string>
++    <string name="fold_trackpad">TRACKPAD</string>
++    <string name="fold_pointer_service">FoldKeyboard Mauszeiger</string>
++    <string name="fold_service_description">Zeigt einen Mauszeiger und führt die auf dem Tastatur-Trackpad eingegebenen Klicks, Scroll- und Ziehgesten aus. Nur bei sichtbarer Fold-Trackpad-Tastatur aktiv. Liest keine Bildschirminhalte.</string>
++    <string name="fold_intro">Links Trackpad, rechts Tastatur in Phone-Größe. Aktiviere FoldKeyboard Mauszeiger unter Eingabehilfe → Installierte Apps/Dienste.</string>
++    <string name="fold_enable_pointer">Mauszeiger aktivieren</string>
++    <string name="fold_connected">Mauszeiger-Dienst verbunden</string>
++    <string name="fold_disconnected">Mauszeiger-Dienst ist aus. Tippen funktioniert weiterhin.</string>
++    <string name="fold_mode">Layout-Modus</string>
++    <string name="fold_auto">Auto — großes inneres Display</string>
++    <string name="fold_always">Immer — ab 480 dp Breite</string>
++    <string name="fold_off">Aus — normales HeliBoard-Layout</string>
++    <string name="fold_width">Tastaturbreite</string>
++    <string name="fold_width_auto">Breite: automatisch, merkt sich äußeres Display</string>
++    <string name="fold_width_value">Breite: %1$d dp, höchstens 45%% des Displays</string>
++    <string name="fold_speed">Zeigergeschwindigkeit</string>
++    <string name="fold_speed_value">Zeigergeschwindigkeit: %1$.1f×</string>
++    <string name="fold_drag">Ziehen</string>
++    <string name="fold_drag_armed">Bewegen, zum Ablegen loslassen</string>
++    <string name="fold_pad_description">Trackpad: Ein Finger bewegt den Zeiger, Tippen klickt, zwei Finger scrollen nach dem Loslassen.</string>
++    <string name="fold_pad_hint">Tippen = Klick · 2 Finger = Scrollen</string>
++    <string name="fold_gesture_failed">Geste unterbrochen oder nicht verfügbar. Alle Finger anheben und erneut versuchen.</string>
++    <string name="fold_gestures">Ein Finger: Zeiger bewegen\nTippen: Klick\nDoppeltippen: Doppelklick\nHalten, dann loslassen: langer Klick\nZwei Finger: Scrollen beim Loslassen\nZiehen-Taste, dann bewegen: Ziehen vorzeichnen; loslassen führt aus\nDoppeltippen und bewegen: Ziehen vorzeichnen; loslassen führt aus\n\nScrollen und Ziehen werden ausgeführt, sobald alle Finger die Tastatur verlassen. Beim Ziehen wird der Zeiger grün; das Objekt folgt nach dem Loslassen. Android behandelt diese Aktionen als Touch-Eingaben. Der Mauszeiger bleibt verfügbar, solange die Tastatur offen ist.\n\nAuto aktiviert sich ab 600 dp verfügbarer Breite und Höhe. Floating- und Split-Layout gelten wieder bei ausgeschaltetem Fold Trackpad. Nach Änderungen die Tastatur schließen und erneut öffnen.</string>
++</resources>
+diff --git a/app/src/main/res/values/clip_provider.xml b/app/src/main/res/values/clip_provider.xml
+index 6c679f8..cbd0cd7 100644
+--- a/app/src/main/res/values/clip_provider.xml
++++ b/app/src/main/res/values/clip_provider.xml
+@@ -1,4 +1,4 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="clipboard_provider_authority" translatable="false">helium314.keyboard.clipprovider</string>
++    <string name="clipboard_provider_authority" translatable="false">com.chris.foldkeyboard.clipprovider</string>
+ </resources>
+diff --git a/app/src/main/res/values/donottranslate.xml b/app/src/main/res/values/donottranslate.xml
+index 5a7f4e5..53b909e 100644
+--- a/app/src/main/res/values/donottranslate.xml
++++ b/app/src/main/res/values/donottranslate.xml
+@@ -70,7 +70,7 @@
+     <!-- Description for Hebrew 2 subtype. -->
+     <string name="subtype_hebrew_1452_2" translatable="false">%s (1452-2)</string>
+ 
+-    <string name="english_ime_name" translatable="false">HeliBoard</string>
++    <string name="english_ime_name" translatable="false">FoldKeyboard</string>
+     <!-- App slogan-->
+     <string name="app_slogan" translatable="false">100% FOSS keyboard, based on AOSP.</string>
+ 
+diff --git a/app/src/main/res/values/fold_trackpad.xml b/app/src/main/res/values/fold_trackpad.xml
+new file mode 100644
+index 0000000..170ff52
+--- /dev/null
++++ b/app/src/main/res/values/fold_trackpad.xml
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- SPDX-License-Identifier: GPL-3.0-only -->
++<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
++    <string name="fold_settings">Fold Trackpad</string>
++    <string name="fold_trackpad">TRACKPAD</string>
++    <string name="fold_pointer_service">FoldKeyboard Pointer</string>
++    <string name="fold_service_description">Displays a pointer and performs taps, scrolls and drag gestures requested on the keyboard trackpad. Active only while the Fold Trackpad keyboard is visible. Does not read screen contents.</string>
++    <string name="fold_intro">Trackpad on the left, phone-sized keyboard on the right. Enable FoldKeyboard Pointer under Accessibility → Installed apps/services.</string>
++    <string name="fold_enable_pointer">Enable pointer</string>
++    <string name="fold_connected">Pointer service connected</string>
++    <string name="fold_disconnected">Pointer service is off. Typing still works.</string>
++    <string name="fold_mode">Layout mode</string>
++    <string name="fold_auto">Auto — large inner display</string>
++    <string name="fold_always">Always — at least 480 dp wide</string>
++    <string name="fold_off">Off — normal HeliBoard layout</string>
++    <string name="fold_width">Keyboard width</string>
++    <string name="fold_width_auto">Width: automatic, remembers outer display</string>
++    <string name="fold_width_value">Width: %1$d dp, at most 45%% of the display</string>
++    <string name="fold_speed">Pointer speed</string>
++    <string name="fold_speed_value">Pointer speed: %1$.1f×</string>
++    <string name="fold_drag">Drag</string>
++    <string name="fold_drag_armed">Move, then lift to drop</string>
++    <string name="fold_pad_description">Trackpad: one finger moves the pointer, tap clicks, two fingers scroll after release.</string>
++    <string name="fold_pad_hint">Tap = click · 2 fingers = scroll</string>
++    <string name="fold_gesture_failed">Gesture interrupted or unavailable. Try again after lifting all fingers.</string>
++    <string name="fold_gestures">One finger: move pointer\nTap: click\nDouble tap: double click\nHold, then lift: long press\nTwo fingers: scroll on release\nDrag button, then move: preview drag; lift to perform\nDouble tap and move: preview drag; lift to perform\n\nScroll and drag are performed after all fingers leave the keyboard. While dragging, the pointer turns green; the target app follows after release. Android treats these actions as touches. Pointer remains available while the keyboard is open.\n\nAuto activates when available width and height are at least 600 dp. Floating and split layouts resume when Fold Trackpad is off. Close and reopen the keyboard after changing settings.</string>
++</resources>
+diff --git a/app/src/main/res/values/gesture_data.xml b/app/src/main/res/values/gesture_data.xml
+index de6c778..65186e7 100644
+--- a/app/src/main/res/values/gesture_data.xml
++++ b/app/src/main/res/values/gesture_data.xml
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="gesture_data_provider_authority" translatable="false">helium314.keyboard.provider</string>
++    <string name="gesture_data_provider_authority" translatable="false">com.chris.foldkeyboard.provider</string>
+     <string name="gesture_data_directory" translatable="false">gesture_data</string>
+     <string name="gesture_data_json" translatable="false">heliboard_data.gestures.json</string>
+     <string name="gesture_data_zip" translatable="false">gesture_data.zip</string>
+diff --git a/app/src/main/res/xml/fold_pointer_service.xml b/app/src/main/res/xml/fold_pointer_service.xml
+new file mode 100644
+index 0000000..2b670b8
+--- /dev/null
++++ b/app/src/main/res/xml/fold_pointer_service.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- SPDX-License-Identifier: GPL-3.0-only -->
++<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
++    android:accessibilityEventTypes="typeWindowStateChanged"
++    android:accessibilityFeedbackType="feedbackGeneric"
++    android:notificationTimeout="100"
++    android:canPerformGestures="true"
++    android:canRetrieveWindowContent="false"
++    android:description="@string/fold_service_description"
++    android:settingsActivity="helium314.keyboard.fold.FoldTrackpadSettingsActivity" />
+diff --git a/app/src/test/java/helium314/keyboard/fold/FoldCoreChecks.java b/app/src/test/java/helium314/keyboard/fold/FoldCoreChecks.java
+new file mode 100644
+index 0000000..c2890c0
+--- /dev/null
++++ b/app/src/test/java/helium314/keyboard/fold/FoldCoreChecks.java
+@@ -0,0 +1,107 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/** Shared by a standalone JDK runner and the Android Gradle unit-test task. */
++public final class FoldCoreChecks {
++    private static int assertions;
++    private static void check(boolean condition, String message) {
++        assertions++;
++        if (!condition) throw new AssertionError(message);
++    }
++    public static void main(String[] args) { runAll(); }
++    public static void runAll() {
++        assertions = 0;
++        check(!FoldLayoutPolicy.enabled("auto", 360, 800, false), "cover portrait");
++        check(!FoldLayoutPolicy.enabled("auto", 800, 360, false), "cover landscape");
++        check(FoldLayoutPolicy.enabled("auto", 800, 700, false), "inner portrait");
++        check(FoldLayoutPolicy.enabled("auto", 700, 800, false), "inner rotated");
++        check(!FoldLayoutPolicy.enabled("auto", 599, 800, false), "narrow multi-window");
++        check(!FoldLayoutPolicy.enabled("off", 1000, 900, false), "off");
++        check(!FoldLayoutPolicy.enabled("always", 1000, 900, true), "locked always");
++        check(FoldLayoutPolicy.enabled("always", 500, 400, false), "manual override");
++        check(!FoldLayoutPolicy.enabled("always", 400, 900, false), "minimum usable width");
++        check(FoldLayoutPolicy.keyboardWidth(1600, 2, 360) == 720, "45 percent");
++        check(FoldLayoutPolicy.keyboardWidth(2400, 2, 360) == 720, "phone width cap");
++        check(FoldLayoutPolicy.keyboardWidth(1600, 2, 320) == 640, "remember cover width");
++        check(FoldLayoutPolicy.gain(100, 0, 10, 2, 1) > FoldLayoutPolicy.gain(1, 0, 30, 2, 1), "acceleration");
++        check(Float.isFinite(FoldLayoutPolicy.gain(100, 100, 0, 2, 1)), "zero duration");
++
++        Recorder r = new Recorder();
++        TrackpadGestureEngine e = engine(r);
++        e.down(20, 20, 1000); e.up(1040);
++        check(r.events.isEmpty(), "tap waits for double tap");
++        e.flushTap(1339); check(r.events.isEmpty(), "tap deadline");
++        e.flushTap(1340); check(r.events.equals(List.of("click1")), "single click once");
++        e.flushTap(1400); check(r.events.size() == 1, "no repeated flush");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.up(1040); e.down(0, 0, 1150); e.up(1200); e.flushTap(1600);
++        check(r.events.equals(List.of("click2")), "double tap does not add single clicks");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.move(50, 20, 1016);
++        check(r.events.equals(List.of("move")), "movement has no injected click");
++        e.up(1040); e.flushTap(1400);
++        check(r.events.equals(List.of("move")), "movement release not a tap");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.move(1, 1, 1200); e.up(1600);
++        check(r.events.equals(List.of("long")), "long press on release");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.pointersChanged(2, 50, 50, 1010); e.move(50, 80, 1020);
++        check(r.events.isEmpty(), "no injection with fingers down");
++        e.pointersChanged(1, 0, 0, 1030); e.move(500, 500, 1040);
++        check(r.events.isEmpty(), "no jump when one scroll finger lifts");
++        e.up(1050);
++        check(r.events.equals(List.of("scroll")) && r.scrollY == 30, "scroll exact centroid delta after release");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.pointersChanged(2, 100, 100, 1010); e.up(1050);
++        check(r.events.isEmpty(), "two-finger tap causes no accidental click");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.up(1040); e.down(0, 0, 1150); e.move(50, 0, 1166);
++        check(r.events.equals(List.of("begin", "move")), "double tap drag previews first");
++        e.up(1200); e.flushTap(1600);
++        check(r.events.equals(List.of("begin", "move", "end")), "drag replay only on release");
++
++        r = new Recorder(); e = engine(r);
++        e.armDrag(); e.down(0, 0, 1000); e.move(20, 0, 1016); e.cancel(); e.up(1100);
++        check(r.events.equals(List.of("begin", "move", "cancel")), "cancel never drops object");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.up(1040); e.cancel(); e.flushTap(1400);
++        check(r.events.isEmpty(), "hiding cancels delayed click");
++
++        r = new Recorder(); e = engine(r);
++        e.armDrag(); e.down(0, 0, 1000); e.pointersChanged(2, 10, 10, 1010); e.move(10, 30, 1020); e.up(1030);
++        check(r.events.equals(List.of("begin", "cancel", "scroll")), "multi-touch cancels drag preview");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.pointersChanged(3, 0, 0, 1010); e.move(100, 100, 1020); e.up(1030);
++        check(r.events.isEmpty(), "three fingers cancel safely");
++
++        r = new Recorder(); e = engine(r);
++        e.down(0, 0, 1000); e.move(30, 0, 1600); e.up(1700);
++        check(r.events.equals(List.of("begin", "move", "end")), "hold and move drag");
++        System.out.println("Fold core: " + assertions + " assertions passed");
++    }
++    private static TrackpadGestureEngine engine(Recorder r) {
++        return new TrackpadGestureEngine(r, 8, 2, 1, 300, 500);
++    }
++    private static final class Recorder implements TrackpadGestureEngine.Sink {
++        final List<String> events = new ArrayList<>();
++        float scrollY;
++        public void move(float dx, float dy) { events.add("move"); }
++        public void click(int count) { events.add("click" + count); }
++        public void longClick() { events.add("long"); }
++        public void scroll(float dx, float dy) { events.add("scroll"); scrollY = dy; }
++        public void beginDrag() { events.add("begin"); }
++        public void endDrag() { events.add("end"); }
++        public void cancelDrag() { events.add("cancel"); }
++    }
++}
+diff --git a/app/src/test/java/helium314/keyboard/fold/FoldCoreTest.java b/app/src/test/java/helium314/keyboard/fold/FoldCoreTest.java
+new file mode 100644
+index 0000000..8cc9484
+--- /dev/null
++++ b/app/src/test/java/helium314/keyboard/fold/FoldCoreTest.java
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: GPL-3.0-only
++package helium314.keyboard.fold;
++
++import org.junit.Test;
++
++public final class FoldCoreTest {
++    @Test public void layoutAndGestureRegressions() { FoldCoreChecks.runAll(); }
++}
+diff --git a/tools/test-fold-core.sh b/tools/test-fold-core.sh
+new file mode 100644
+index 0000000..292b773
+--- /dev/null
++++ b/tools/test-fold-core.sh
+@@ -0,0 +1,12 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: GPL-3.0-only
++set -euo pipefail
++cd "$(dirname "$0")/.."
++fold_java="${JAVA_HOME:+$JAVA_HOME/bin/}java"
++fold_classes="build/fold-core-tests"
++mkdir -p "$fold_classes"
++"$fold_java" -m jdk.compiler/com.sun.tools.javac.Main -d "$fold_classes" \
++  app/src/main/java/helium314/keyboard/fold/FoldLayoutPolicy.java \
++  app/src/main/java/helium314/keyboard/fold/TrackpadGestureEngine.java \
++  app/src/test/java/helium314/keyboard/fold/FoldCoreChecks.java
++"$fold_java" -cp "$fold_classes" helium314.keyboard.fold.FoldCoreChecks
